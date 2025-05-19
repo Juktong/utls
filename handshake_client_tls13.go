@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/mlkem"
 	"crypto/rsa"
@@ -75,9 +76,17 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 
 	if hs.echContext != nil {
 		hs.echContext.innerTranscript = hs.suite.hash.New()
-		if err := transcriptMsg(hs.echContext.innerHello, hs.echContext.innerTranscript); err != nil {
-			return err
+		// [uTLS SECTION BEGIN]
+		if hs.uconn != nil && hs.uconn.clientHelloBuildStatus == BuildByUtls {
+			if err := hs.uconn.echTranscriptMsg(hs.hello, hs.echContext); err != nil {
+				return err
+			}
+		} else {
+			if err := transcriptMsg(hs.echContext.innerHello, hs.echContext.innerTranscript); err != nil {
+				return err
+			}
 		}
+		// [uTLS SECTION END]
 	}
 
 	if bytes.Equal(hs.serverHello.random, helloRetryRequestRandom) {
@@ -426,7 +435,7 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 							hs.uconn.Extensions[cookieIndex:]...)...)
 				}
 			}
-			if err := hs.uconn.MarshalClientHello(); err != nil {
+			if err := hs.uconn.MarshalClientHelloNoECH(); err != nil {
 				return err
 			}
 			hs.hello.original = hs.uconn.HandshakeState.Hello.Raw
@@ -445,12 +454,25 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 		// extension which may have changed is keyShares.
 		hs.hello.keyShares = hello.keyShares
 		hs.echContext.innerHello = hello
-		if err := transcriptMsg(hs.echContext.innerHello, hs.echContext.innerTranscript); err != nil {
-			return err
-		}
+		if hs.uconn != nil && hs.uconn.clientHelloBuildStatus == BuildByUtls {
+			if err := hs.uconn.computeAndUpdateOuterECHExtension(hs.echContext.innerHello, hs.echContext, false); err != nil {
+				return err
+			}
 
-		if err := computeAndUpdateOuterECHExtension(hs.hello, hs.echContext.innerHello, hs.echContext, false); err != nil {
-			return err
+			hs.hello.original = hs.uconn.HandshakeState.Hello.Raw
+
+			if err := hs.uconn.echTranscriptMsg(hs.hello, hs.echContext); err != nil {
+				return err
+			}
+
+		} else {
+			if err := transcriptMsg(hs.echContext.innerHello, hs.echContext.innerTranscript); err != nil {
+				return err
+			}
+
+			if err := computeAndUpdateOuterECHExtension(hs.hello, hs.echContext.innerHello, hs.echContext, false); err != nil {
+				return err
+			}
 		}
 	} else {
 		hs.hello = hello
@@ -541,6 +563,22 @@ func (hs *clientHandshakeStateTLS13) processServerHello() error {
 	return nil
 }
 
+// [uTLS] SECTION BEGIN
+func getSharedKey(peerData []byte, key *ecdh.PrivateKey) ([]byte, error) {
+	peerKey, err := key.Curve().NewPublicKey(peerData)
+	if err != nil {
+		return nil, errors.New("tls: invalid server key share")
+	}
+	sharedKey, err := key.ECDH(peerKey)
+	if err != nil {
+		return nil, errors.New("tls: invalid server key share")
+	}
+
+	return sharedKey, nil
+}
+
+// [uTLS] SECTION END
+
 func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
 	c := hs.c
 
@@ -560,13 +598,8 @@ func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
 		}
 		ecdhePeerData = hs.serverHello.serverShare.data[:x25519PublicKeySize]
 	}
+	sharedKey, err := getSharedKey(ecdhePeerData, hs.keyShareKeys.ecdhe)
 	// [uTLS] SECTION END
-	peerKey, err := hs.keyShareKeys.ecdhe.Curve().NewPublicKey(ecdhePeerData)
-	if err != nil {
-		c.sendAlert(alertIllegalParameter)
-		return errors.New("tls: invalid server key share")
-	}
-	sharedKey, err := hs.keyShareKeys.ecdhe.ECDH(peerKey)
 	if err != nil {
 		c.sendAlert(alertIllegalParameter)
 		return errors.New("tls: invalid server key share")
@@ -575,6 +608,14 @@ func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
 		if hs.keyShareKeys.mlkem == nil {
 			return c.sendAlert(alertInternalError)
 		}
+		// [uTLS] SECTION BEGIN
+		if hs.uconn != nil && hs.uconn.clientHelloBuildStatus == BuildByUtls {
+			if sharedKey, err = getSharedKey(ecdhePeerData, hs.keyShareKeys.mlkemEcdhe); err != nil {
+				c.sendAlert(alertIllegalParameter)
+				return errors.New("tls: invalid server key share")
+			}
+		}
+		// [uTLS] SECTION END
 		ciphertext := hs.serverHello.serverShare.data[:mlkem.CiphertextSize768]
 		mlkemShared, err := hs.keyShareKeys.mlkem.Decapsulate(ciphertext)
 		if err != nil {
@@ -587,6 +628,12 @@ func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
 	if hs.serverHello.serverShare.group == X25519Kyber768Draft00 {
 		if hs.keyShareKeys.mlkem == nil {
 			return c.sendAlert(alertInternalError)
+		}
+		if hs.uconn != nil && hs.uconn.clientHelloBuildStatus == BuildByUtls {
+			if sharedKey, err = getSharedKey(ecdhePeerData, hs.keyShareKeys.mlkemEcdhe); err != nil {
+				c.sendAlert(alertIllegalParameter)
+				return errors.New("tls: invalid server key share")
+			}
 		}
 		ciphertext := hs.serverHello.serverShare.data[x25519PublicKeySize:]
 		kyberShared, err := kyberDecapsulate(hs.keyShareKeys.mlkem, ciphertext)

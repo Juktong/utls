@@ -880,6 +880,79 @@ func utlsIdToSpec(id ClientHelloID) (ClientHelloSpec, error) {
 				&UtlsGREASEExtension{},
 			}),
 		}, nil
+	case HelloChrome_133:
+		return ClientHelloSpec{
+			CipherSuites: []uint16{
+				GREASE_PLACEHOLDER,
+				TLS_AES_128_GCM_SHA256,
+				TLS_AES_256_GCM_SHA384,
+				TLS_CHACHA20_POLY1305_SHA256,
+				TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+				TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+				TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+				TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				TLS_RSA_WITH_AES_128_GCM_SHA256,
+				TLS_RSA_WITH_AES_256_GCM_SHA384,
+				TLS_RSA_WITH_AES_128_CBC_SHA,
+				TLS_RSA_WITH_AES_256_CBC_SHA,
+			},
+			CompressionMethods: []byte{
+				0x00, // compressionNone
+			},
+			Extensions: ShuffleChromeTLSExtensions([]TLSExtension{
+				&UtlsGREASEExtension{},
+				&SNIExtension{},
+				&ExtendedMasterSecretExtension{},
+				&RenegotiationInfoExtension{Renegotiation: RenegotiateOnceAsClient},
+				&SupportedCurvesExtension{[]CurveID{
+					GREASE_PLACEHOLDER,
+					X25519MLKEM768,
+					X25519,
+					CurveP256,
+					CurveP384,
+				}},
+				&SupportedPointsExtension{SupportedPoints: []byte{
+					0x00, // pointFormatUncompressed
+				}},
+				&SessionTicketExtension{},
+				&ALPNExtension{AlpnProtocols: []string{"h2", "http/1.1"}},
+				&StatusRequestExtension{},
+				&SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []SignatureScheme{
+					ECDSAWithP256AndSHA256,
+					PSSWithSHA256,
+					PKCS1WithSHA256,
+					ECDSAWithP384AndSHA384,
+					PSSWithSHA384,
+					PKCS1WithSHA384,
+					PSSWithSHA512,
+					PKCS1WithSHA512,
+				}},
+				&SCTExtension{},
+				&KeyShareExtension{[]KeyShare{
+					{Group: CurveID(GREASE_PLACEHOLDER), Data: []byte{0}},
+					{Group: X25519MLKEM768},
+					{Group: X25519},
+				}},
+				&PSKKeyExchangeModesExtension{[]uint8{
+					PskModeDHE,
+				}},
+				&SupportedVersionsExtension{[]uint16{
+					GREASE_PLACEHOLDER,
+					VersionTLS13,
+					VersionTLS12,
+				}},
+				&UtlsCompressCertExtension{[]CertCompressionAlgo{
+					CertCompressionBrotli,
+				}},
+				&ApplicationSettingsExtensionNew{SupportedProtocols: []string{"h2"}},
+				BoringGREASEECH(),
+				&UtlsGREASEExtension{},
+			}),
+		}, nil
 	case HelloFirefox_55, HelloFirefox_56:
 		return ClientHelloSpec{
 			TLSVersMax: VersionTLS12,
@@ -2779,6 +2852,9 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 			if ext.ServerName == "" {
 				ext.ServerName = uconn.config.ServerName
 			}
+			if uconn.config.EncryptedClientHelloConfigList != nil {
+				ext.ServerName = string(ech.config.PublicName)
+			}
 		case *UtlsGREASEExtension:
 			switch grease_extensions_seen {
 			case 0:
@@ -2827,17 +2903,8 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 					} else {
 						ext.KeyShares[i].Data = append(mlkemKey.EncapsulationKey().Bytes(), ecdheKey.PublicKey().Bytes()...)
 					}
-					if !preferredCurveIsSet {
-						// only do this once for the first non-grease curve
-						uconn.HandshakeState.State13.KeyShareKeys.mlkem = mlkemKey
-						preferredCurveIsSet = true
-					}
-
-					if len(ext.KeyShares) > i+1 && ext.KeyShares[i+1].Group == X25519 {
-						// Reuse the same X25519 ephemeral key for both keyshares, as allowed by draft-ietf-tls-hybrid-design-09, Section 3.2.
-						uconn.HandshakeState.State13.KeyShareKeys.Ecdhe = ecdheKey
-						ext.KeyShares[i+1].Data = ecdheKey.PublicKey().Bytes()
-					}
+					uconn.HandshakeState.State13.KeyShareKeys.mlkem = mlkemKey
+					uconn.HandshakeState.State13.KeyShareKeys.mlkemEcdhe = ecdheKey
 				} else {
 					ecdheKey, err := generateECDHEKey(uconn.config.rand(), curveID)
 					if err != nil {
