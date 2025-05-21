@@ -1541,6 +1541,12 @@ func (e *CookieExtension) writeToUConn(uc *UConn) error {
 }
 
 func (e *CookieExtension) Len() int {
+	// The total length of the Cookie extension is:
+	// 2 bytes for ExtensionType (extensionCookie)
+	// 2 bytes for OuterExtensionDataLength
+	// 2 bytes for InnerCookieLength (len(e.Cookie))
+	// N bytes for the Cookie data itself (e.Cookie)
+	// So, total = 6 + len(e.Cookie)
 	return 6 + len(e.Cookie)
 }
 
