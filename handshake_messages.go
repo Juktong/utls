@@ -1276,6 +1276,7 @@ func (m *newSessionTicketMsgTLS13) unmarshal(data []byte) bool {
 }
 
 type certificateRequestMsgTLS13 struct {
+	original                         []byte
 	ocspStapling                     bool
 	scts                             bool
 	supportedSignatureAlgorithms     []SignatureScheme
@@ -1356,7 +1357,7 @@ func (m *certificateRequestMsgTLS13) marshal() ([]byte, error) {
 }
 
 func (m *certificateRequestMsgTLS13) unmarshal(data []byte) bool {
-	*m = certificateRequestMsgTLS13{}
+	*m = certificateRequestMsgTLS13{original: data}
 	s := cryptobyte.String(data)
 
 	var context, extensions cryptobyte.String
@@ -1393,19 +1394,19 @@ func (m *certificateRequestMsgTLS13) unmarshal(data []byte) bool {
 				m.supportedSignatureAlgorithms = append(
 					m.supportedSignatureAlgorithms, SignatureScheme(sigAndAlg))
 			}
-		case extensionCompressCertificate:
-			var algs cryptobyte.String
-			if !extData.ReadUint8LengthPrefixed(&algs) || algs.Empty() {
-				return false
-			}
-			for !algs.Empty() {
-				var alg uint16
-				if !algs.ReadUint16(&alg) {
-					return false
-				}
-				m.certRequestCompressionAlgs = append(
-					m.certRequestCompressionAlgs, CertCompressionAlgo(alg))
-			}
+		// case extensionCompressCertificate:
+		// 	var algs cryptobyte.String
+		// 	if !extData.ReadUint8LengthPrefixed(&algs) || algs.Empty() {
+		// 		return false
+		// 	}
+		// 	for !algs.Empty() {
+		// 		var alg uint16
+		// 		if !algs.ReadUint16(&alg) {
+		// 			return false
+		// 		}
+		// 		m.certRequestCompressionAlgs = append(
+		// 			m.certRequestCompressionAlgs, CertCompressionAlgo(alg))
+		// 	}
 		case extensionSignatureAlgorithmsCert:
 			var sigAndAlgs cryptobyte.String
 			if !extData.ReadUint16LengthPrefixed(&sigAndAlgs) || sigAndAlgs.Empty() {
@@ -1442,6 +1443,10 @@ func (m *certificateRequestMsgTLS13) unmarshal(data []byte) bool {
 	}
 
 	return true
+}
+
+func (m *certificateRequestMsgTLS13) originalBytes() []byte {
+	return m.original
 }
 
 type certificateMsg struct {
