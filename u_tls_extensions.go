@@ -611,8 +611,11 @@ type ALPNExtension struct {
 }
 
 func (e *ALPNExtension) writeToUConn(uc *UConn) error {
-	uc.config.NextProtos = e.AlpnProtocols
-	uc.HandshakeState.Hello.AlpnProtocols = e.AlpnProtocols
+	// If ech is enabled, the uc.config.NextProtos should not be changed.
+	if uc.config.EncryptedClientHelloConfigList == nil {
+		uc.config.NextProtos = e.AlpnProtocols
+		uc.HandshakeState.Hello.AlpnProtocols = e.AlpnProtocols
+	}
 	return nil
 }
 
