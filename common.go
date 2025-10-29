@@ -316,11 +316,6 @@ type ConnectionState struct {
 	// testingOnlyCurveID is the selected CurveID, or zero if an RSA exchanges
 	// is performed.
 	testingOnlyCurveID CurveID
-
-	// ECHRetryConfigs contains the ECH retry configurations sent by the server in
-	// EncryptedExtensions message. It is only populated if the server sent the
-	// ech extension in EncryptedExtensions message.
-	ECHRetryConfigs []ECHConfig // [uTLS]
 }
 
 // ExportKeyingMaterial returns length bytes of exported key material in a new
@@ -471,6 +466,8 @@ type ClientHelloInfo struct {
 	// Extensions lists the IDs of the extensions presented by the client
 	// in the ClientHello.
 	Extensions []uint16
+
+	EncryptedClientHello []byte // [uTLS]
 
 	// Conn is the underlying net.Conn for the connection. Do not read
 	// from, or write to, this connection; that will cause the TLS
@@ -919,7 +916,6 @@ type Config struct {
 	// autoSessionTicketKeys is like sessionTicketKeys but is owned by the
 	// auto-rotation logic. See Config.ticketKeys.
 	autoSessionTicketKeys []ticketKey
-
 	// ECHConfigs contains the ECH configurations to be used by the ECH
 	// extension if any.
 	// It could either be distributed by the server in EncryptedExtensions
