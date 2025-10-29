@@ -467,6 +467,8 @@ type ClientHelloInfo struct {
 	// in the ClientHello.
 	Extensions []uint16
 
+	EncryptedClientHello []byte // [uTLS]
+
 	// Conn is the underlying net.Conn for the connection. Do not read
 	// from, or write to, this connection; that will cause the TLS
 	// connection to fail.
