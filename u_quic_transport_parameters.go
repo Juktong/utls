@@ -268,7 +268,12 @@ func (*VersionInformation) GetGREASEVersion() uint32 {
 		return VERSION_GREASE
 	}
 
-	return uint32(randVal.Uint64()&math.MaxUint32) | 0x0a0a0a0a // all GREASE versions are in 0x?a?a?a?a
+	// Reserved ("GREASE") versions follow the pattern 0x?a?a?a?a (RFC 9000 §15), i.e. the
+	// low nibble of every byte must be exactly 0xa. Those nibbles have to be masked off
+	// before they are set: OR-ing alone leaves the random bits underneath, so a random
+	// nibble of 0x5 becomes 0xf rather than 0xa and the version is not a GREASE value at
+	// all. Only 1 draw in 256 came out valid before the mask was added.
+	return uint32(randVal.Uint64()&math.MaxUint32)&0xf0f0f0f0 | 0x0a0a0a0a
 }
 
 type PaddingTransportParameter []byte
