@@ -47,15 +47,18 @@ type TLS13OnlyState struct {
 	// Will be removed in the future.
 	KEMKey *KemPrivateKey
 
-	KeyShareKeys  *KeySharePrivateKeys
-	Suite         *PubCipherSuiteTLS13
-	EarlySecret   []byte
-	BinderKey     []byte
-	CertReq       *CertificateRequestMsgTLS13
-	UsingPSK      bool // don't set this field when building client hello
-	SentDummyCCS  bool
-	Transcript    hash.Hash
-	TrafficSecret []byte // client_application_traffic_secret_0
+	KeyShareKeys *KeySharePrivateKeys
+	// KeyShareKeysByGroup contains private key material for key shares generated
+	// by ApplyPreset, keyed by the group advertised in the ClientHello.
+	KeyShareKeysByGroup map[CurveID]*KeySharePrivateKeys
+	Suite               *PubCipherSuiteTLS13
+	EarlySecret         []byte
+	BinderKey           []byte
+	CertReq             *CertificateRequestMsgTLS13
+	UsingPSK            bool // don't set this field when building client hello
+	SentDummyCCS        bool
+	Transcript          hash.Hash
+	TrafficSecret       []byte // client_application_traffic_secret_0
 }
 
 // TLS 1.2 and before only
@@ -76,6 +79,23 @@ func (chs *TLS13OnlyState) private13KeyShareKeys() *keySharePrivateKeys {
 	}
 
 	return nil
+}
+
+func (chs *TLS13OnlyState) selectKeyShareKeys(group CurveID) {
+	if chs.KeyShareKeys != nil {
+		if chs.KeyShareKeys.CurveID == group {
+			return
+		}
+		if chs.KeyShareKeys.Ecdhe != nil {
+			if curveID, ok := curveIDForCurve(chs.KeyShareKeys.Ecdhe.Curve()); ok && curveID == group {
+				return
+			}
+		}
+	}
+
+	if keyShareKeys, ok := chs.KeyShareKeysByGroup[group]; ok {
+		chs.KeyShareKeys = keyShareKeys
+	}
 }
 
 // func kyberGoToCircl(kyberKey *mlkem768.DecapsulationKey, ecdhKey *ecdh.PrivateKey) (kem.PrivateKey, error) {

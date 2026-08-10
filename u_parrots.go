@@ -3025,6 +3025,7 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 	} else {
 		uconn.HandshakeState.State13.KeyShareKeys = &KeySharePrivateKeys{}
 	}
+	uconn.HandshakeState.State13.KeyShareKeysByGroup = make(map[CurveID]*KeySharePrivateKeys)
 	uconn.echCtx = ech
 	hello := uconn.HandshakeState.Hello
 
@@ -3161,6 +3162,12 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 					}
 					uconn.HandshakeState.State13.KeyShareKeys.Mlkem = mlkemKey
 					uconn.HandshakeState.State13.KeyShareKeys.MlkemEcdhe = ecdheKey
+					uconn.HandshakeState.State13.KeyShareKeysByGroup[curveID] = &KeySharePrivateKeys{
+						CurveID:    curveID,
+						Ecdhe:      ecdheKey,
+						Mlkem:      mlkemKey,
+						MlkemEcdhe: ecdheKey,
+					}
 					if isHybridReuse {
 						expectedClassical, _ := classicalCurveForHybrid(curveID)
 						reusableClassicalKeys[expectedClassical] = append(
@@ -3183,8 +3190,13 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 						reusableClassicalKeys[curveID] = keysForCurve[1:]
 
 						ext.KeyShares[i].Data = reusedKey.PublicKey().Bytes()
+						uconn.HandshakeState.State13.KeyShareKeysByGroup[curveID] = &KeySharePrivateKeys{
+							CurveID: curveID,
+							Ecdhe:   reusedKey,
+						}
 						if !preferredCurveIsSet {
 							// only do this once for the first non-grease curve
+							uconn.HandshakeState.State13.KeyShareKeys.CurveID = curveID
 							uconn.HandshakeState.State13.KeyShareKeys.Ecdhe = reusedKey
 							preferredCurveIsSet = true
 						}
@@ -3198,8 +3210,13 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 					}
 
 					ext.KeyShares[i].Data = ecdheKey.PublicKey().Bytes()
+					uconn.HandshakeState.State13.KeyShareKeysByGroup[curveID] = &KeySharePrivateKeys{
+						CurveID: curveID,
+						Ecdhe:   ecdheKey,
+					}
 					if !preferredCurveIsSet {
 						// only do this once for the first non-grease curve
+						uconn.HandshakeState.State13.KeyShareKeys.CurveID = curveID
 						uconn.HandshakeState.State13.KeyShareKeys.Ecdhe = ecdheKey
 						preferredCurveIsSet = true
 					}

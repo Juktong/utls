@@ -6,6 +6,7 @@ package tls
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -185,6 +186,53 @@ func TestUTLSHelloRetryRequest(t *testing.T) {
 	}
 
 	runUTLSClientTestTLS13(t, test, hello)
+}
+
+func TestUTLSHandshakeSelectsSecondaryKeyShare(t *testing.T) {
+	for _, helloID := range []ClientHelloID{
+		HelloFirefox_120,
+		HelloFirefox_148,
+	} {
+		t.Run(helloID.Str(), func(t *testing.T) {
+			serverConn, clientConn := net.Pipe()
+
+			serverConfig := testConfig.Clone()
+			serverConfig.Rand = crand.Reader
+			serverConfig.MinVersion = VersionTLS13
+			serverConfig.MaxVersion = VersionTLS13
+			serverConfig.CurvePreferences = []CurveID{CurveP256}
+
+			serverErr := make(chan error, 1)
+			go func() {
+				defer serverConn.Close()
+				serverErr <- Server(serverConn, serverConfig).Handshake()
+			}()
+
+			client := UClient(clientConn, &Config{
+				ServerName:         "example.com",
+				InsecureSkipVerify: true,
+				MinVersion:         VersionTLS13,
+				MaxVersion:         VersionTLS13,
+			}, helloID)
+
+			clientErr := client.Handshake()
+			clientConn.Close()
+			serverHandshakeErr := <-serverErr
+
+			if clientErr != nil {
+				t.Fatalf("client handshake failed: %v", clientErr)
+			}
+			if serverHandshakeErr != nil {
+				t.Fatalf("server handshake failed: %v", serverHandshakeErr)
+			}
+			if client.didHRR {
+				t.Fatal("server selected an offered secondary key share through HelloRetryRequest")
+			}
+			if client.curveID != CurveP256 {
+				t.Fatalf("server selected group %v, want %v", client.curveID, CurveP256)
+			}
+		})
+	}
 }
 
 func TestUTLSRemoveSNIExtension(t *testing.T) {

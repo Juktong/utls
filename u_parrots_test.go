@@ -89,6 +89,27 @@ func TestParrotFingerprintsReuseHybridClassicalKeyShare(t *testing.T) {
 			if keys.MlkemEcdhe != keys.Ecdhe {
 				t.Fatalf("expected %s hybrid/classical keyshares to reuse the same ECDHE private key", helloID.Str())
 			}
+
+			keysByGroup := uconn.HandshakeState.State13.KeyShareKeysByGroup
+			hybridKeys := keysByGroup[X25519MLKEM768]
+			classicalKeys := keysByGroup[X25519]
+			p256Keys := keysByGroup[CurveP256]
+			if hybridKeys == nil || hybridKeys.Mlkem == nil || hybridKeys.MlkemEcdhe == nil {
+				t.Fatal("expected complete hybrid private key material")
+			}
+			if classicalKeys == nil || classicalKeys.Ecdhe == nil {
+				t.Fatal("expected X25519 private key material")
+			}
+			if p256Keys == nil || p256Keys.Ecdhe == nil {
+				t.Fatal("expected P-256 private key material")
+			}
+			if hybridKeys.MlkemEcdhe != classicalKeys.Ecdhe {
+				t.Fatal("expected per-group hybrid/classical keys to reuse the same ECDHE private key")
+			}
+			p256Data := findKeyShareData(t, keyShareExt, CurveP256)
+			if !bytes.Equal(p256Keys.Ecdhe.PublicKey().Bytes(), p256Data) {
+				t.Fatal("P-256 private key does not match the advertised key share")
+			}
 		})
 	}
 }
@@ -150,5 +171,46 @@ func TestHybridClassicalKeySharesAreIndependentByDefault(t *testing.T) {
 	}
 	if keys.MlkemEcdhe == keys.Ecdhe {
 		t.Fatal("expected independent keyshares by default: hybrid/classical ECDHE private keys should differ")
+	}
+
+	keysByGroup := uconn.HandshakeState.State13.KeyShareKeysByGroup
+	hybridKeys := keysByGroup[X25519MLKEM768]
+	classicalKeys := keysByGroup[X25519]
+	if hybridKeys == nil || hybridKeys.MlkemEcdhe == nil {
+		t.Fatal("expected hybrid private key material")
+	}
+	if classicalKeys == nil || classicalKeys.Ecdhe == nil {
+		t.Fatal("expected classical private key material")
+	}
+	if hybridKeys.MlkemEcdhe == classicalKeys.Ecdhe {
+		t.Fatal("expected per-group hybrid/classical ECDHE private keys to differ")
+	}
+}
+
+func TestTLS13OnlyStateSelectKeyShareKeys(t *testing.T) {
+	manualP256, err := generateECDHEKey(&incrementingSource{}, CurveP256)
+	if err != nil {
+		t.Fatalf("failed to generate manual P-256 key: %v", err)
+	}
+
+	fallback := &KeySharePrivateKeys{Ecdhe: manualP256}
+	generatedP256 := &KeySharePrivateKeys{CurveID: CurveP256}
+	x25519Keys := &KeySharePrivateKeys{CurveID: X25519}
+	state := TLS13OnlyState{
+		KeyShareKeys: fallback,
+		KeyShareKeysByGroup: map[CurveID]*KeySharePrivateKeys{
+			CurveP256: generatedP256,
+			X25519:    x25519Keys,
+		},
+	}
+
+	state.selectKeyShareKeys(CurveP256)
+	if state.KeyShareKeys != fallback {
+		t.Fatal("generated group replaced caller-provided key share keys")
+	}
+
+	state.selectKeyShareKeys(X25519)
+	if state.KeyShareKeys != x25519Keys {
+		t.Fatal("offered group did not select its private key material")
 	}
 }

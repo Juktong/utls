@@ -535,6 +535,9 @@ func (c *UConn) clientHandshake(ctx context.Context) (err error) {
 	// uTLS: do not create new handshakeState, use existing one
 	c.HandshakeState.ServerHello = serverHello.getPublicPtr()
 	if c.vers == VersionTLS13 {
+		if serverHello.serverShare.group != 0 {
+			c.HandshakeState.State13.selectKeyShareKeys(serverHello.serverShare.group)
+		}
 		hs13 := c.HandshakeState.toPrivate13()
 		hs13.serverHello = serverHello
 		hs13.hello = hello
