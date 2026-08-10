@@ -531,6 +531,13 @@ func (hs *clientHandshakeStateTLS13) processServerHello() error {
 		c.sendAlert(alertIllegalParameter)
 		return errors.New("tls: server selected unsupported group")
 	}
+	// [uTLS SECTION BEGIN]
+	// ClientHelloSpec can contain multiple independently generated key shares,
+	// unlike the standard library's single key bundle (or reused hybrid
+	// fallback). Select after validating the final ServerHello so this also
+	// covers the second ServerHello read after a cookie-only HRR.
+	hs.selectKeyShareKeysForGroup(hs.serverHello.serverShare.group)
+	// [uTLS SECTION END]
 
 	if !hs.serverHello.selectedIdentityPresent {
 		return nil

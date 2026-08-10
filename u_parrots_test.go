@@ -187,30 +187,134 @@ func TestHybridClassicalKeySharesAreIndependentByDefault(t *testing.T) {
 	}
 }
 
-func TestTLS13OnlyStateSelectKeyShareKeys(t *testing.T) {
-	manualP256, err := generateECDHEKey(&incrementingSource{}, CurveP256)
-	if err != nil {
-		t.Fatalf("failed to generate manual P-256 key: %v", err)
+func processServerHelloForKeyShareSelection(
+	t *testing.T,
+	current *keySharePrivateKeys,
+	keysByGroup map[CurveID]*KeySharePrivateKeys,
+	offeredGroups []CurveID,
+	selectedGroup CurveID,
+) *keySharePrivateKeys {
+	t.Helper()
+
+	keyShares := make([]keyShare, len(offeredGroups))
+	for i, group := range offeredGroups {
+		keyShares[i].group = group
 	}
 
-	fallback := &KeySharePrivateKeys{Ecdhe: manualP256}
-	generatedP256 := &KeySharePrivateKeys{CurveID: CurveP256}
-	x25519Keys := &KeySharePrivateKeys{CurveID: X25519}
-	state := TLS13OnlyState{
-		KeyShareKeys: fallback,
-		KeyShareKeysByGroup: map[CurveID]*KeySharePrivateKeys{
-			CurveP256: generatedP256,
-			X25519:    x25519Keys,
+	conn := &Conn{didHRR: true}
+	uconn := &UConn{
+		Conn: conn,
+		HandshakeState: PubClientHandshakeState{
+			State13: TLS13OnlyState{KeyShareKeysByGroup: keysByGroup},
+		},
+	}
+	hs := &clientHandshakeStateTLS13{
+		c:            conn,
+		hello:        &clientHelloMsg{keyShares: keyShares},
+		serverHello:  &serverHelloMsg{serverShare: keyShare{group: selectedGroup}},
+		keyShareKeys: current,
+		uconn:        uconn,
+	}
+
+	if err := hs.processServerHello(); err != nil {
+		t.Fatalf("processServerHello failed: %v", err)
+	}
+	return hs.keyShareKeys
+}
+
+func TestProcessServerHelloSelectsSecondaryKeyShareAfterCookieOnlyHRR(t *testing.T) {
+	// A cookie-only HRR keeps the original key shares. This constructs the
+	// private state seen when processHelloRetryRequest has read the final
+	// ServerHello and the server selects the secondary offered group.
+	x25519Key, err := generateECDHEKey(&incrementingSource{}, X25519)
+	if err != nil {
+		t.Fatalf("failed to generate X25519 key: %v", err)
+	}
+	p256Key, err := generateECDHEKey(&incrementingSource{}, CurveP256)
+	if err != nil {
+		t.Fatalf("failed to generate P-256 key: %v", err)
+	}
+
+	selected := processServerHelloForKeyShareSelection(
+		t,
+		&keySharePrivateKeys{curveID: X25519, ecdhe: x25519Key},
+		map[CurveID]*KeySharePrivateKeys{
+			X25519:    {CurveID: X25519, Ecdhe: x25519Key},
+			CurveP256: {CurveID: CurveP256, Ecdhe: p256Key},
+		},
+		[]CurveID{X25519, CurveP256},
+		CurveP256,
+	)
+
+	if selected.curveID != CurveP256 || selected.ecdhe != p256Key {
+		t.Fatal("final ServerHello did not select the retained secondary P-256 private key")
+	}
+}
+
+func TestProcessServerHelloKeepsHelloRetryRequestKey(t *testing.T) {
+	p384Key, err := generateECDHEKey(&incrementingSource{}, CurveP384)
+	if err != nil {
+		t.Fatalf("failed to generate P-384 key: %v", err)
+	}
+
+	hrrKeys := &keySharePrivateKeys{curveID: CurveP384, ecdhe: p384Key}
+	selected := processServerHelloForKeyShareSelection(
+		t,
+		hrrKeys,
+		map[CurveID]*KeySharePrivateKeys{
+			CurveP384: {CurveID: CurveP384},
+		},
+		[]CurveID{CurveP384},
+		CurveP384,
+	)
+
+	if selected != hrrKeys {
+		t.Fatal("preset registry replaced the fresh private key generated for HelloRetryRequest")
+	}
+}
+
+func TestProcessServerHelloKeepsCallerProvidedKeyShareKeys(t *testing.T) {
+	p256Key, err := generateECDHEKey(&incrementingSource{}, CurveP256)
+	if err != nil {
+		t.Fatalf("failed to generate P-256 key: %v", err)
+	}
+	x25519Key, err := generateECDHEKey(&incrementingSource{}, X25519)
+	if err != nil {
+		t.Fatalf("failed to generate X25519 key: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		group   CurveID
+		current *keySharePrivateKeys
+	}{
+		{
+			name:    "classical group inferred from ECDHE curve",
+			group:   CurveP256,
+			current: &keySharePrivateKeys{ecdhe: p256Key},
+		},
+		{
+			name:    "hybrid group identified by explicit CurveID",
+			group:   X25519MLKEM768,
+			current: &keySharePrivateKeys{curveID: X25519MLKEM768, ecdhe: x25519Key},
 		},
 	}
 
-	state.selectKeyShareKeys(CurveP256)
-	if state.KeyShareKeys != fallback {
-		t.Fatal("generated group replaced caller-provided key share keys")
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			selected := processServerHelloForKeyShareSelection(
+				t,
+				test.current,
+				map[CurveID]*KeySharePrivateKeys{
+					test.group: {CurveID: test.group},
+				},
+				[]CurveID{test.group},
+				test.group,
+			)
 
-	state.selectKeyShareKeys(X25519)
-	if state.KeyShareKeys != x25519Keys {
-		t.Fatal("offered group did not select its private key material")
+			if selected != test.current {
+				t.Fatal("generated registry replaced caller-provided private key material")
+			}
+		})
 	}
 }
