@@ -966,7 +966,10 @@ func (kpk *kemPrivateKey) ToPublic() *KemPrivateKey {
 }
 
 type KeySharePrivateKeys struct {
-	CurveID    CurveID
+	// CurveID identifies the offered group. Callers must set it for hybrid
+	// groups, whose classical ECDHE curve alone cannot identify the group.
+	CurveID CurveID
+
 	Ecdhe      *ecdh.PrivateKey
 	Mlkem      *mlkem.DecapsulationKey768
 	MlkemEcdhe *ecdh.PrivateKey
